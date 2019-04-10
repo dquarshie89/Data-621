@@ -1,0 +1,231 @@
+---
+title: ""
+output:
+  rmdformats::readthedown:
+    highlight: kate
+---
+
+````{r include = FALSE}
+knitr::opts_chunk$set(echo=FALSE, message=FALSE, warning = FALSE)
+```
+#DATA 621:  HW 3   
+David Quarshie - Group 3  
+
+```{r}
+library('ggplot2')
+library('MASS')
+library('dplyr')
+library('faraway')
+library('DataExplorer')
+library('psych')
+library('caret')
+library('stargazer')
+library('pROC')
+library('gridExtra')
+```
+
+
+```{r LoadData}
+train_url <- 'https://raw.githubusercontent.com/dquarshie89/Data-621/master/crime-training-data_modified.csv'
+train <- read.csv(train_url, header=TRUE)
+
+test_url <- 'https://raw.githubusercontent.com/dquarshie89/Data-621/master/crime-evaluation-data_modified.csv'
+test <- read.csv(test_url, header=TRUE)
+
+theme_update(plot.title = element_text(hjust = 0.5), 
+             axis.text.x = element_text(angle = 90, hjust = 1))
+
+trainchas <- as.factor(train$chas)
+train$chas <- NULL
+traintarget <- as.factor(train$target)
+train$target <- traintarget
+testchas <- as.factor(test$chas)
+test$chas <- NULL
+```  
+
+# 1. DATA EXPLORATION
+
+Below we'll display a few basic EDA techniques to gain insight into our crime dataset.
+
+## Basic Statistics
+
+There are 466 rows and 14 columns (features). Of all 14 columns, 2 are discrete, 12 are continuous, and 0 are all missing. There are 0 missing values out of 6,524 data points.
+
+```{r}
+summary <- psych::describe(train[,c(1:11)])[,c(2:5,8,9,11,12)]
+knitr::kable(summary)
+```  
+## Compare Target in Training
+
+We make sure there are no issues with an inappropriate distribution of the target variable in our training data.
+
+```{r}
+knitr::kable(table(train$target))
+```
+
+## Histogram of Variables
+
+```{r}
+plot_histogram(train)
+
+```
+```{r}
+plot_boxplot(
+  data = train,
+  by = "target")+ 
+  geom_jitter()
+```
+
+#2. DATA PREPARATION  
+
+There are no missing variables, which is nice.   We can see from our visualizations a few variables with some issues.  
+
+##1: Zn
+
+```{r}
+ggplot(train, aes(x=zn)) + geom_density(aes(colour=factor(target))) + xlim(0,100) +
+  geom_vline(xintercept = 3)
+train$znN <- ifelse(train$zn > 3, 1, 0)
+train$znN <- as.factor(train$znN)
+t <- as.data.frame(table(train=train$znN, Target=train$target))
+knitr::kable(t)
+```  
+
+
+From the above density plot, we can see it is worth to try transforming numberic zn variable to a new categorical variable. Here I set up a new variable `znN`: *1* means more than 3% of residential land zoned for large lots (over 25000 square feet) and *0* means less than or equal to 3% of residential land zoned for large lots (over 25000 square feet).  
+
+##2: Indus
+
+```{r}
+attach(train)
+p0 <- ggplot(train, aes(factor(target), indus)) + geom_boxplot()
+train <- train[-which(target==0 & indus > 20),]
+p1 <- ggplot(train, aes(factor(target), indus)) + geom_boxplot()
+grid.arrange(p0, p1,ncol=2,nrow=1)
+detach(train)
+```  
+
+
+Here I removed the rows which `indus` is greater than 20 while `target` is 0.  
+
+
+##3: Dis  
+
+```{r}
+attach(train)
+p0 <- ggplot(train, aes(factor(target), dis)) + geom_boxplot()
+train <- train[-which(target==0 & dis > 11),]
+train <- train[-which(target==1 & dis > 7.5),]
+p1 <- ggplot(train, aes(factor(target), dis)) + geom_boxplot()
+grid.arrange(p0, p1, ncol=2,nrow=1)
+detach(train)
+```  
+
+Here I removed the rows which `dis` is greater than 11 while `target` is 0 and the rows which `dis` is greater than 7.5 while `target` is 1.  
+
+##4: Rad
+
+```{r}
+ggplot(train, aes(x=rad)) + geom_density(aes(colour=factor(target))) + xlim(0,100) + geom_vline(xintercept = 7)
+train$radN <- ifelse(train$rad > 7, 1, 0)
+train$radN <- as.factor(train$radN)
+t <- as.data.frame(table(radN=train$radN, Target=train$target))
+knitr::kable(t)
+```
+
+Here I applied the same strategy as `zn`. I set up a new variable `radN`: *1* means index of accessibility to radial highways is greater than 7 and *0* means index of accessibility to radial highways is less than or equal to 7.  
+
+##Data Summary  
+```{r}
+names(train)
+dim(train)
+```  
+
+
+# 3. BUILD MODELS
+
+Because we have a small number of observations to train over, we'll use k-fold Cross Validation to train, with k = 10.   We'll hold out 15% of the data for validation while doing initial modeling, but once we select our model, we'll retrain over the full training set.
+
+Each of our logistic regression models will use bionomial regression with a logit link function. 
+
+
+##Model 1  
+
+The first model fits includes all the variables.   A review of the VIF output of the model suggests some points that are highly colinear and a number of variables that may not be necessary.   Model 1 uses the formula:
+
+__target ~ .__  
+
+```{r}
+set.seed(121)
+split <- createDataPartition(train$target, p=0.85, list=FALSE)
+partial_train <- train[split, ]
+validation <- train[ -split, ]
+mod1 <- train(target ~., data = partial_train, 
+              method = "glm", family = "binomial",
+              trControl = trainControl(
+                  method = "cv", number = 10,
+                  savePredictions = TRUE),
+              tuneLength = 5, 
+              preProcess = c("center", "scale"))
+knitr::kable(vif(mod1$finalModel))
+```  
+
+## Model 2  
+
+Model 2 ignores the colinear issues, but removes models that seemed unnecessary in Model 1.  
+
+Model 2 uses the formula:   
+
+__target ~ zn + nox + age + dis + rad + ptratio + medv__
+
+```{r, echo=FALSE, warning=FALSE}
+# remove low p-values
+mod2 <- train(target ~ zn + nox + age + dis + rad + ptratio + medv, 
+            data = partial_train, 
+            method = "glm", family = "binomial",
+            trControl = trainControl(
+                  method = "cv", number = 10,
+                  savePredictions = TRUE),
+            tuneLength = 5, 
+            preProcess = c("center", "scale"))
+knitr::kable(vif(mod2$finalModel))
+```  
+
+## Model 3
+
+Model 3 removes the variables with the 2 highest VIF values from model1.   The model formula is:
+
+__target ~ indus + rm + age + dis + tax + ptratio + lstat + medv__
+
+```{r, echo=FALSE, warning=FALSE}
+## Reduce Collinearity by removing high VIFs
+mod3 <- train(target ~ indus + rm + age + dis + tax + ptratio + lstat + medv, data = partial_train, 
+              method = "glm", family = "binomial",
+              trControl = trainControl(
+                  method = "cv", number = 10,
+                  savePredictions = TRUE),
+              tuneLength = 5, 
+              preProcess = c("center", "scale"))
+knitr::kable(vif(mod3$finalModel))
+```  
+
+##Model 4
+
+Model 4 takes the advances in model #3 and removes those values shown to be poor predictors.   
+
+__target ~ age + dis + tax + medv__
+
+```{r, echo=FALSE, warning=FALSE}
+## reduce collinearity, and remove low values
+mod4 <- train(target ~ age + dis + tax + medv, 
+            data = partial_train, 
+            method = "glm", family = "binomial",
+            trControl = trainControl(
+                  method = "cv", number = 10,
+                  savePredictions = TRUE),
+            tuneLength = 5, 
+            preProcess = c("center", "scale"))
+knitr::kable(vif(mod4$finalModel))
+```
+
+
