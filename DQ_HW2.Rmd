@@ -1,0 +1,124 @@
+---
+title: ""
+output:
+  rmdformats::readthedown:
+    highlight: kate
+---
+
+
+````{r include = FALSE}
+knitr::opts_chunk$set(echo=FALSE, message=FALSE, warning = FALSE)
+```
+#DATA 621:  HW 2  
+David Quarshie - Group 3  
+
+#Load Data  
+```{r}
+library(knitr)
+library(ggplot2)
+library(caret)
+library(pROC)
+
+data_url <- 'https://raw.githubusercontent.com/dquarshie89/Data-621/master/classification-output-data.csv'
+data <- read.csv(data_url, header=TRUE)
+```  
+
+#Question 2: Table
+```{r}
+t <- as.data.frame(table(Actual_Class=data$class, Predicted_Class=data$scored.class))
+kable(t)
+```  
+
+The table shows the observations prediction outcomes. There were 119 that were class 0 and correctly predicted as class 0, 30 that were class 1 but predicted as class 0, 5 that were class 0 but predicted as class 1, and 27 that were class 1 and predicted as class 1.  
+
+#Question 3-8 & 11: Classification Metrics  
+```{r}
+rates <- function(t){
+  t <- as.data.frame(table(Actual_Class=data$class, Predicted_Class=data$scored.class))
+  accuracy <- (t$Freq[1] + t$Freq[4])/sum(t$Freq)
+  error_rate <- (t$Freq[2] + t$Freq[3])/sum(t$Freq)
+  precision <- t$Freq[1]/(t$Freq[1]+t$Freq[2])
+  sensitivity <- t$Freq[1]/(t$Freq[1] + t$Freq[3])
+  specificity <- t$Freq[4]/(t$Freq[4]+t$Freq[2])
+  f1 <- (2 * precision * sensitivity) / (precision + sensitivity)
+  
+  df <- data.frame(accuracy = accuracy,
+                   error_rate = error_rate,
+                   precision = precision,
+                   sensitivity = sensitivity,
+                   specificity = specificity,
+                   f1 = f1)
+  return(df)
+}
+
+results <- rates(t)
+```  
+Verify that the accuracy and error rate sum to 1:  
+```{r}
+print(results$accuracy + results$error_rate)
+```
+Print all the classification metrics:
+```{r}
+knitr::kable(results)
+```  
+
+#Question 9: F1 Score  
+The precision and sensitivity scores are each bounded between 0 and 1, with the F1 score being calculated with those metrics we know that it must also be between 0 and 1.  
+
+#Question 10: ROC Curve  
+```{r}
+ROC <- function(class, scores){
+  class <- class[order(scores, decreasing=T)]
+  
+  Sensitivity <- cumsum(class)/sum(class)
+  Specificity <- cumsum(!class)/sum(!class)
+  
+  df <- data.frame(Sensitivity,
+                   Specificity,
+                   class)
+  
+  dSpecificity <- c(diff(Specificity), 0)
+  dSensitivity <- c(diff(Sensitivity), 0)
+  
+  AUC <- round(sum(Sensitivity * dSpecificity) + sum(dSensitivity * dSpecificity) / 2, 4)
+  results <- list(df, AUC)
+  return(results)
+}
+
+ROC_Results <- ROC(data$class, data$scored.probability)
+rocResults <- ROC_Results[[1]]
+AUC <- ROC_Results[[2]]
+ggplot(rocResults, aes(Specificity, Sensitivity)) +
+geom_line(color='red') +
+annotate("text", x=.5, y = .3, label=paste("Area= ", AUC))
+```  
+
+#Question 12: Caret Package  
+```{r}
+cM <-  confusionMatrix(table(data$scored.class, data$class))
+caretR <- data.frame(t(cM$byClass))
+caretResults <- data.frame(accuracy = cM$overall[['Accuracy']],
+                           error_rate = 1 - cM$overall[['Accuracy']],
+                           precision = caretR$Precision,
+                           sensitivity = caretR$Sensitivity,
+                           specificity = caretR$Specificity,
+                           f1 = caretR$F1)
+compare <- rbind(results, caretResults)
+row.names(compare) <- c("MyFunction", "Caret")
+knitr::kable(compare)
+```  
+
+As shown in the table we got the same results by using the caret function.  
+
+
+#Question 12: pROC Package  
+```{r}
+ROC_plot <- roc(data$class, data$scored.probability)
+plot(ROC_plot, asp=NA, legacy.axes = TRUE, print.auc=TRUE, xlab="Specificity")
+```
+The ROC package got us the same plot and area under the curve.  
+
+
+
+
+

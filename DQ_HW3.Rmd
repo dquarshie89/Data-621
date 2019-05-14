@@ -1,0 +1,321 @@
+---
+title: ""
+output:
+  rmdformats::readthedown:
+    highlight: kate
+---
+
+````{r include = FALSE}
+knitr::opts_chunk$set(echo=FALSE, message=FALSE, warning = FALSE)
+```
+#DATA 621:  HW 3   
+David Quarshie - Group 3  
+
+In this assignment we will build a logistic regression model to predict wheter a particular neighborhood in Boston is above or below the median crime level. We're given information on 466 Boston neighborhoods, 13 predictor variables and 1 response variable, target. Target will tell us if the neighborhood is above the median crime level (1) or below it (0).
+
+```{r LoadLibraries}
+library('ggplot2')
+library('MASS')
+library('dplyr')
+library('faraway')
+library('DataExplorer')
+library('psych')
+library('caret')
+library('stargazer')
+library('pROC')
+library('gridExtra')
+```
+
+
+```{r LoadData}
+train_url <- 'https://raw.githubusercontent.com/dquarshie89/Data-621/master/crime-training-data_modified.csv'
+train <- read.csv(train_url, header=TRUE)
+
+test_url <- 'https://raw.githubusercontent.com/dquarshie89/Data-621/master/crime-evaluation-data_modified.csv'
+test <- read.csv(test_url, header=TRUE)
+```  
+
+# 1. DATA EXPLORATION
+
+Below we'll display a few basic EDA techniques to gain insight into our crime dataset.
+
+## Basic Statistics
+
+There are 466 rows and 14 columns. Thankfully, there are no missing values out of all of the 6,524 data points.
+
+```{r}
+summary <- psych::describe(train[,c(1:11)])[,c(2:5,8,9,11,12)]
+knitr::kable(summary)
+```  
+## Distribution of Target Variable
+
+Let's look at the target variable in our training data to make sure there no one sided distribution.
+
+```{r}
+knitr::kable(table(train$target))
+```
+
+## Histogram of Variables
+
+```{r}
+plot_histogram(train)
+```  
+## Boxplot of Variables
+```{r}
+plot_boxplot(
+  data = train,
+  by = "target")+ 
+  geom_jitter()
+```
+
+#2. DATA PREPARATION  
+
+We've determined that there are no missing values in our data, but looking at our visualizations we see a few variables with some issues.  
+
+##1: Chas  
+
+Looking at the results from our chas variable it doesn't seem to be needed here so we can remove it.  
+
+```{r}
+trainchas <- as.factor(train$chas)
+train$chas <- NULL
+traintarget <- as.factor(train$target)
+train$target <- traintarget
+testchas <- as.factor(test$chas)
+test$chas <- NULL
+```
+
+
+##2: Indus  
+
+We see a lot of outliers in the indus variable, so we'll removed the rows which indus is greater than 20 and target is 0.  
+
+```{r}
+attach(train)
+p0 <- ggplot(train, aes(factor(target), indus)) + geom_boxplot()
+train <- train[-which(target==0 & indus > 20),]
+p1 <- ggplot(train, aes(factor(target), indus)) + geom_boxplot()
+grid.arrange(p0, p1,ncol=2,nrow=1)
+detach(train)
+```  
+
+
+
+##3: Dis  
+
+Dis also has some outliers so we'll remove rows where dis was greater than 11 and target was 0, and where dis was greater than 7.5 and target was 1.  
+
+```{r}
+attach(train)
+p0 <- ggplot(train, aes(factor(target), dis)) + geom_boxplot()
+train <- train[-which(target==0 & dis > 11),]
+train <- train[-which(target==1 & dis > 7.5),]
+p1 <- ggplot(train, aes(factor(target), dis)) + geom_boxplot()
+grid.arrange(p0, p1, ncol=2,nrow=1)
+detach(train)
+```  
+
+
+##Data Summary  
+Let's take a quick look at what variables we have remaining.  
+```{r}
+names(train)
+dim(train)
+```  
+
+
+# 3. BUILD MODELS
+
+k-fold Cross Validation is used when there's a small amount of data to train. For our project we're only dealing with 466 obersavations so we'll use k-fold with k = 10.   We'll keep out 20% of the data for validation while doing the first modeling and when we select our final model we'll use the full training set.
+
+Each of our logistic regression models will use bionomial regression with a logit link function. 
+
+
+##Model 1  
+
+For the first model we will include all the variables.  Looking at the output of the model we see that some points are highly colinear and a some variables that may not be necessary.   
+
+Model 1 uses the formula:
+
+__target ~ .__  
+
+```{r}
+set.seed(121)
+split <- createDataPartition(train$target, p=0.80, list=FALSE)
+partial_train <- train[split, ]
+validation <- train[ -split, ]
+mod1 <- train(target ~., data = partial_train, 
+              method = "glm", family = "binomial",
+              trControl = trainControl(
+                  method = "cv", number = 10,
+                  savePredictions = TRUE),
+              tuneLength = 5, 
+              preProcess = c("center", "scale"))
+knitr::kable(vif(mod1$finalModel))
+```  
+
+## Model 2  
+
+For the second model we ignore what's colinear but remove unneccessary variables shown in model 1.  
+
+Model 2's formula:   
+
+__target ~ zn + nox + age + dis + rad + ptratio + medv__
+
+```{r, echo=FALSE, warning=FALSE}
+# remove low p-values
+mod2 <- train(target ~ zn + nox + age + dis + rad + ptratio + medv, 
+            data = partial_train, 
+            method = "glm", family = "binomial",
+            trControl = trainControl(
+                  method = "cv", number = 10,
+                  savePredictions = TRUE),
+            tuneLength = 5, 
+            preProcess = c("center", "scale"))
+knitr::kable(vif(mod2$finalModel))
+```  
+
+## Model 3
+
+For model 3 take out the variables with the 2 highest VIF values from the first model.  
+
+Model 3's formula:  
+
+__target ~ indus + rm + age + dis + tax + ptratio + lstat + medv__
+
+```{r, echo=FALSE, warning=FALSE}
+## Reduce Collinearity by removing high VIFs
+mod3 <- train(target ~ indus + rm + age + dis + tax + ptratio + lstat + medv, data = partial_train, 
+              method = "glm", family = "binomial",
+              trControl = trainControl(
+                  method = "cv", number = 10,
+                  savePredictions = TRUE),
+              tuneLength = 5, 
+              preProcess = c("center", "scale"))
+knitr::kable(vif(mod3$finalModel))
+```  
+
+##Model 4
+
+For our final model we remove the not needed vairables from model 3.  
+
+Model 4's formula:  
+
+__target ~ age + dis + tax + medv__
+
+```{r, echo=FALSE, warning=FALSE}
+## reduce collinearity, and remove low values
+mod4 <- train(target ~ age + dis + tax + medv, 
+            data = partial_train, 
+            method = "glm", family = "binomial",
+            trControl = trainControl(
+                  method = "cv", number = 10,
+                  savePredictions = TRUE),
+            tuneLength = 5, 
+            preProcess = c("center", "scale"))
+knitr::kable(vif(mod4$finalModel))
+```  
+
+# 4. SELECT MODELS
+
+It's time for us to pick which model we want to use. To help do this we'll review each model's accuracy by making predictions on the 20% we kept and comparing their results. We'll use fourfold plots, summary statistics, and ROC / AUC plots to determine overall accuarcy.  
+
+### Fourfold Plots
+
+```{r, echo=FALSE, warning=FALSE}
+preds1 <- predict(mod1, newdata = validation)
+preds2 <- predict(mod2, newdata = validation)
+preds3 <- predict(mod3, newdata = validation)
+preds4 <- predict(mod4, newdata = validation)
+m1cM <- confusionMatrix(preds1, validation$target, 
+                        mode = "everything")
+m2cM <- confusionMatrix(preds2, validation$target, 
+                        mode = "everything")
+m3cM <- confusionMatrix(preds3, validation$target, 
+                        mode = "everything")
+m4cM <- confusionMatrix(preds4, validation$target, 
+                        mode = "everything")
+par(mfrow=c(2,2))
+fourfoldplot(m1cM$table, color = c("#B22222", "#2E8B57"), main="Mod1")
+fourfoldplot(m2cM$table, color = c("#B22222", "#2E8B57"), main="Mod2")
+fourfoldplot(m3cM$table, color = c("#B22222", "#2E8B57"), main="Mod3")
+fourfoldplot(m4cM$table, color = c("#B22222", "#2E8B57"), main="Mod4")
+```
+
+### Summary Statistics
+
+```{r, echo=FALSE, warning=FALSE}
+eval <- data.frame(m1cM$byClass, 
+                   m2cM$byClass, 
+                   m3cM$byClass, 
+                   m4cM$byClass)
+eval <- data.frame(t(eval))
+# manipulate results DF
+eval <- dplyr::select(eval, Sensitivity, Specificity, Precision, Recall, F1)
+row.names(eval) <- c("Model1", "Model2", "Model3", "Model4")
+knitr::kable(eval)
+```
+
+### ROC / AUC
+
+```{r, echo=FALSE, warning=FALSE}
+getROC <- function(model) {
+    name <- deparse(substitute(model))
+    pred.prob1 <- predict(model, newdata = train, type="prob")
+    p1 <- data.frame(pred = train$target, prob = pred.prob1[[1]])
+    p1 <- p1[order(p1$prob),]
+    rocobj <- roc(p1$pred, p1$prob)
+    plot(rocobj, asp=NA, legacy.axes = TRUE, print.auc=TRUE,
+         xlab="Specificity", main = name)
+}
+par(mfrow=c(2,2))
+getROC(mod1)
+getROC(mod2)
+getROC(mod3)
+getROC(mod4)
+```
+
+
+### Model Selection
+
+Model 1 and 2 both  contain more variables than 3 and 4 but they also have so colinearity issues that can be seen when we look at the VIF output.   Model 3 performs takes care of colinearity but also has variables that are not needed. In the end, we'll go with model 4 which deals with colinearity and gets rid of unneeded variables.   
+
+Let's use model 4 over our full dataset and review some summary diagnostic plots and outputs.  
+
+```{r, echo=FALSE, warning=FALSE}
+finalmod <- train(target ~ age + dis + tax + medv, 
+            data = train, 
+            method = "glm", family = "binomial",
+            trControl = trainControl(
+                  method = "cv", number = 10,
+                  savePredictions = TRUE),
+            tuneLength = 5, 
+            preProcess = c("center", "scale"))
+summary(finalmod)
+plot(finalmod$finalModel)
+```  
+
+## Odds Ratio  
+
+Here's a table of the Odds Ratio for model 4 beside the 95% confidence interval of those boundaries.  
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+odds <- round(exp(cbind(OddsRatio = coef(finalmod$finalModel), confint(finalmod$finalModel))), 3)
+knitr::kable(odds)
+```
+
+Our output shows us that the odds of the neighborhood being below the median crime rate increase by 3.303% when age increases by 1.  
+
+
+#5. Make Predictions
+
+At last, we can make our final predictions. We can see from the head of our final dataframe and the table output of our predicted variable class that the prediction distribution looks very similar to that of our initial test distribution.  
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+finalpreds <- predict(finalmod, test)
+finalpreds.probs <- predict(finalmod, test, type="prob")
+finaldf <- cbind(finalpreds.probs, prediction=finalpreds)
+write.csv(finaldf, 'HW3_prediction.csv', row.names = FALSE)
+knitr::kable(head(finaldf))
+knitr::kable(table(finaldf$prediction))
+```
